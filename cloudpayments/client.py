@@ -292,7 +292,7 @@ class CloudPayments(object):
             params['SendWhatsApp'] = send_whatsapp
         if culture_info is not None:
             params['CultureInfo'] = culture_info
-        if  data is not None:
+        if data is not None:
             params['JsonData'] = data
 
         response = await self._send_request(session, 'orders/create', params)
@@ -343,3 +343,4 @@ class CloudPayments(object):
         if response['Success']:
             return response
         raise CloudPaymentsError(response)
+
