@@ -16,7 +16,7 @@ CloudPayments Python Client Library (Asynchronous Fork)
 
 ::
 
-    pip install aio-cloudpayments
+    pip install async-cloud-payments-fork
 
 Требования
 ==========
