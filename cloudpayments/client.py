@@ -1,6 +1,7 @@
 import decimal
-
-import requests
+import aiohttp
+import asyncio
+from aiohttp import ClientSession
 from requests.auth import HTTPBasicAuth
 
 from .errors import CloudPaymentsError, PaymentError
@@ -15,37 +16,36 @@ class CloudPayments(object):
         self.public_id = public_id
         self.api_secret = api_secret
 
-    def _send_request(self, endpoint, params=None, request_id=None):
-        auth = HTTPBasicAuth(self.public_id, self.api_secret)
+    async def _send_request(self, session: ClientSession, endpoint: str, params=None, request_id=None):
+        auth = aiohttp.BasicAuth(self.public_id, self.api_secret)
 
         headers = None
         if request_id is not None:
             headers = {'X-Request-ID': request_id}
 
-        response = requests.post(self.URL + endpoint, json=params, auth=auth, 
-                                 headers=headers)
-        return response.json(parse_float=decimal.Decimal)
+        async with session.post(self.URL + endpoint, json=params, auth=auth, headers=headers) as response:
+            response_json = await response.json()
+            return response_json
 
-    def test(self, request_id=None):
-        response = self._send_request('test', request_id=request_id)
+    async def test(self, session: ClientSession, request_id=None):
+        response = await self._send_request(session, 'test', request_id=request_id)
 
         if not response['Success']:
             raise CloudPaymentsError(response)
         return response['Message']
 
-    def get_transaction(self, transaction_id):
+    async def get_transaction(self, session: ClientSession, transaction_id):
         """Get transaction info by its id."""
         params = {'TransactionId': transaction_id}
-        response = self._send_request('payments/get', params)
+        response = await self._send_request(session, 'payments/get', params)
         if 'Model' in response.keys():
             return Transaction.from_dict(response['Model'])
         else:
             raise CloudPaymentsError(response)
 
-    def charge_card(self, cryptogram, amount, currency, name, ip_address,
-                    invoice_id=None, description=None, account_id=None,
-                    email=None, data=None, require_confirmation=False,
-                    service_fee=None):
+    async def charge_card(self, session: ClientSession, cryptogram, amount, currency, name, ip_address,
+                          invoice_id=None, description=None, account_id=None, email=None, data=None,
+                          require_confirmation=False, service_fee=None):
         params = {
             'Amount': amount,
             'Currency': currency,
@@ -68,7 +68,7 @@ class CloudPayments(object):
 
         endpoint = ('payments/cards/auth' if require_confirmation else
                     'payments/cards/charge')
-        response = self._send_request(endpoint, params)
+        response = await self._send_request(session, endpoint, params)
 
         if response['Success']:
             return Transaction.from_dict(response['Model'])
@@ -78,20 +78,20 @@ class CloudPayments(object):
             raise PaymentError(response)
         return Secure3d.from_dict(response['Model'])
 
-    def finish_3d_secure_authentication(self, transaction_id, pa_res):
+    async def finish_3d_secure_authentication(self, session: ClientSession, transaction_id, pa_res):
         params = {
             'TransactionId': transaction_id,
             'PaRes': pa_res
         }
-        response = self._send_request('payments/cards/post3ds', params)
+        response = await self._send_request(session, 'payments/cards/post3ds', params)
 
         if response['Success']:
             return Transaction.from_dict(response['Model'])
         raise PaymentError(response)
 
-    def charge_token(self, token, account_id, amount, currency,
-                     ip_address=None, invoice_id=None, description=None,
-                     email=None, data=None, tr_initiator_code: int = 1, require_confirmation=False):
+    async def charge_token(self, session: ClientSession, token, account_id, amount, currency, ip_address=None,
+                           invoice_id=None, description=None, email=None, data=None, tr_initiator_code: int = 1,
+                           require_confirmation=False):
         params = {
             'Amount': amount,
             'Currency': currency,
@@ -112,14 +112,14 @@ class CloudPayments(object):
 
         endpoint = ('payments/tokens/auth' if require_confirmation else
                     'payments/tokens/charge')
-        response = self._send_request(endpoint, params)
+        response = await self._send_request(session, endpoint, params)
         if response['Success']:
             return Transaction.from_dict(response['Model'])
         if 'Model' in response and 'ReasonCode' in response['Model']:
             raise PaymentError(response)
         raise CloudPaymentsError(response)
 
-    def confirm_payment(self, transaction_id, amount, data=None):
+    async def confirm_payment(self, session: ClientSession, transaction_id, amount, data=None):
         params = {
             'Amount': amount,
             'TransactionId': transaction_id
@@ -128,31 +128,31 @@ class CloudPayments(object):
         if data is not None:
             params['JsonData'] = data
 
-        response = self._send_request('payments/confirm', params)
+        response = await self._send_request(session, 'payments/confirm', params)
 
         if not response['Success']:
             raise CloudPaymentsError(response)
 
-    def void_payment(self, transaction_id):
+    async def void_payment(self, session: ClientSession, transaction_id):
         params = {'TransactionId': transaction_id}
-        response = self._send_request('payments/void', params)
+        response = await self._send_request(session, 'payments/void', params)
 
         if not response['Success']:
             raise CloudPaymentsError(response)
 
-    def refund(self, transaction_id, amount, request_id=None):
+    async def refund(self, session: ClientSession, transaction_id, amount, request_id=None):
         params = {
             'Amount': amount,
             'TransactionId': transaction_id
         }
-        response = self._send_request('payments/refund', params, request_id)
+        response = await self._send_request(session, 'payments/refund', params, request_id)
 
         if not response['Success']:
             raise CloudPaymentsError(response)
 
         return response['Model']['TransactionId']
 
-    def topup(self, token, amount, account_id, currency, invoice_id=None):
+    async def topup(self, session: ClientSession, token, amount, account_id, currency, invoice_id=None):
         params = {
             'Token': token,
             'Amount': amount,
@@ -161,36 +161,35 @@ class CloudPayments(object):
         }
         if invoice_id is not None:
             params['InvoiceId'] = invoice_id
-        response = self._send_request('payments/cards/topup', params)
+        response = await self._send_request(session, 'payments/cards/topup', params)
 
         if response['Success']:
             return Transaction.from_dict(response['Model'])
 
         raise CloudPaymentsError(response)
 
-    def find_payment(self, invoice_id):
+    async def find_payment(self, session: ClientSession, invoice_id):
         params = {'InvoiceId': invoice_id}
-        response = self._send_request('payments/find', params)
+        response = await self._send_request(session, 'payments/find', params)
 
         if response['Success']:
             return Transaction.from_dict(response['Model'])
         raise CloudPaymentsError(response)
 
-    def list_payments(self, date, timezone=None):
+    async def list_payments(self, session: ClientSession, date, timezone=None):
         params = {'Date': format_date(date)}
         if timezone is not None:
             params['Timezone'] = timezone
 
-        response = self._send_request('payments/list', params)
+        response = await self._send_request(session, 'payments/list', params)
 
         if response['Success']:
-            return map(Transaction.from_dict, response['Model'])
+            return [Transaction.from_dict(item) for item in response['Model']]
         raise CloudPaymentsError(response)
 
-    def create_subscription(self, token, account_id, amount, currency,
-                            description, email, start_date, interval, period,
-                            require_confirmation=False, max_periods=None,
-                            customer_receipt=None):
+    async def create_subscription(self, session: ClientSession, token, account_id, amount, currency,
+                                  description, email, start_date, interval, period, require_confirmation=False,
+                                  max_periods=None, customer_receipt=None):
         params = {
             'Token': token,
             'AccountId': account_id,
@@ -208,33 +207,31 @@ class CloudPayments(object):
         if customer_receipt is not None:
             params['CustomerReceipt'] = customer_receipt
 
-        response = self._send_request('subscriptions/create', params)
+        response = await self._send_request(session, 'subscriptions/create', params)
 
         if response['Success']:
             return Subscription.from_dict(response['Model'])
         raise CloudPaymentsError(response)
 
-    def list_subscriptions(self, account_id):
+    async def list_subscriptions(self, session: ClientSession, account_id):
         params = {'accountId': account_id}
-        response = self._send_request('subscriptions/find', params)
+        response = await self._send_request(session, 'subscriptions/find', params)
 
         if response['Success']:
-            return map(Subscription.from_dict, response['Model'])
+            return [Subscription.from_dict(item) for item in response['Model']]
         raise CloudPaymentsError(response)
 
-        
-    def get_subscription(self, subscription_id):
+    async def get_subscription(self, session: ClientSession, subscription_id):
         params = {'Id': subscription_id}
-        response = self._send_request('subscriptions/get', params)
+        response = await self._send_request(session, 'subscriptions/get', params)
 
         if response['Success']:
             return Subscription.from_dict(response['Model'])
         raise CloudPaymentsError(response)
 
-    def update_subscription(self, subscription_id, amount=None, currency=None,
-                            description=None, start_date=None, interval=None,
-                            period=None, require_confirmation=None,
-                            max_periods=None):
+    async def update_subscription(self, session: ClientSession, subscription_id, amount=None, currency=None,
+                                  description=None, start_date=None, interval=None, period=None,
+                                  require_confirmation=None, max_periods=None):
         params = {
             'Id': subscription_id
         }
@@ -255,25 +252,23 @@ class CloudPayments(object):
         if max_periods is not None:
             params['MaxPeriods'] = max_periods
 
-        response = self._send_request('subscriptions/update', params)
+        response = await self._send_request(session, 'subscriptions/update', params)
 
         if response['Success']:
             return Subscription.from_dict(response['Model'])
         raise CloudPaymentsError(response)
 
-    def cancel_subscription(self, subscription_id):
+    async def cancel_subscription(self, session: ClientSession, subscription_id):
         params = {'Id': subscription_id}
 
-        response = self._send_request('subscriptions/cancel', params)
+        response = await self._send_request(session, 'subscriptions/cancel', params)
 
         if not response['Success']:
             raise CloudPaymentsError(response)
 
-    def create_order(self, amount, currency, description, email=None,
-                     send_email=None, require_confirmation=None,
-                     invoice_id=None, account_id=None, phone=None,
-                     send_sms=None, send_whatsapp=None, culture_info=None,
-                     data=None):
+    async def create_order(self, session: ClientSession, amount, currency, description, email=None,
+                           send_email=None, require_confirmation=None, invoice_id=None, account_id=None,
+                           phone=None, send_sms=None, send_whatsapp=None, culture_info=None, data=None):
         params = {
             'Amount': amount,
             'Currency': currency,
@@ -300,14 +295,14 @@ class CloudPayments(object):
         if  data is not None:
             params['JsonData'] = data
 
-        response = self._send_request('orders/create', params)
+        response = await self._send_request(session, 'orders/create', params)
 
         if response['Success']:
             return Order.from_dict(response['Model'])
         raise CloudPaymentsError(response)
 
-    def create_receipt(self, inn, receipt_type, customer_receipt, 
-                       invoice_id=None, account_id=None, request_id=None):
+    async def create_receipt(self, session: ClientSession, inn, receipt_type, customer_receipt,
+                             invoice_id=None, account_id=None, request_id=None):
         if isinstance(customer_receipt, Receipt):
             customer_receipt = customer_receipt.to_dict()
 
@@ -321,29 +316,22 @@ class CloudPayments(object):
         if account_id is not None:
             params['AccountId'] = account_id
 
-        response = self._send_request('kkt/receipt', params, request_id)
+        response = await self._send_request(session, 'kkt/receipt', params, request_id)
 
         if not response['Success']:
             raise CloudPaymentsError(response)
         return response['Model']['Id']
 
-    def get_receipt(self, receipt_id):
+    async def get_receipt(self, session: ClientSession, receipt_id):
         params = {'Id': receipt_id}
-        response = self._send_request('kkt/receipt/get', params)
+        response = await self._send_request(session, 'kkt/receipt/get', params)
 
         if response['Success']:
             return Receipt.from_dict(response['Model'])
         raise CloudPaymentsError(response)
 
-    def update_webhook(
-            self,
-            webhook_type: WebhookType,
-            address,
-            is_enabled: bool = True,
-            method="GET",
-            encoding="UTF8",
-            format_notifications="CloudPayments"
-    ):
+    async def update_webhook(self, session: ClientSession, webhook_type: WebhookType, address, is_enabled: bool = True,
+                             method="GET", encoding="UTF8", format_notifications="CloudPayments"):
         params = {
             'IsEnabled': is_enabled,
             'Address': address,
@@ -351,7 +339,7 @@ class CloudPayments(object):
             'Encoding': encoding,
             'Format': format_notifications
         }
-        response = self._send_request(f'site/notifications/{webhook_type}/update', params)
+        response = await self._send_request(session, f'site/notifications/{webhook_type}/update', params)
         if response['Success']:
             return response
         raise CloudPaymentsError(response)
